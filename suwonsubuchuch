@@ -1,0 +1,428 @@
+```react
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { 
+  Plus, Calendar, Users, MessageCircle, Heart, UserPlus, Star, Save, 
+  Trash2, BarChart3, Quote, CalendarDays, CalendarRange, History,
+  TrendingUp, Award, Edit3, User, ClipboardCheck,
+  CalendarCheck, Globe, CheckCircle2
+} from 'lucide-react';
+
+// Firebase configuration
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'suwon-seobu-church-community';
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [viewType, setViewType] = useState('all'); // 'personal' or 'all'
+  const [activeTab, setActiveTab] = useState('week');
+
+  const [formData, setFormData] = useState({
+    date: new Date().toISOString().split('T')[0],
+    attendees: '',
+    contacts: 0,
+    evangelism: 0,
+    acceptances: 0,
+    spiritualTalks: 0,
+    invitations: 0,
+    testimony: ''
+  });
+
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const q = collection(db, 'artifacts', appId, 'public', 'data', 'evangelismLogs');
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })).sort((a, b) => new Date(b.date) - new Date(a.date));
+      setLogs(data);
+      setIsLoading(false);
+    }, (error) => {
+      console.error("Firestore error:", error);
+      setIsLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // Statistics Calculation
+  const stats = useMemo(() => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+    const currentQuarter = Math.floor(currentMonth / 3);
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay());
+
+    const filterByPeriod = (logDateStr, period) => {
+      const logDate = new Date(logDateStr);
+      logDate.setHours(0, 0, 0, 0);
+      if (period === 'year') return logDate.getFullYear() === currentYear;
+      if (period === 'quarter') return logDate.getFullYear() === currentYear && Math.floor(logDate.getMonth() / 3) === currentQuarter;
+      if (period === 'month') return logDate.getFullYear() === currentYear && logDate.getMonth() === currentMonth;
+      if (period === 'week') return logDate >= startOfWeek && logDate <= now;
+      return false;
+    };
+
+    const calculate = (period, isGlobal) => {
+      const targetLogs = isGlobal ? logs : logs.filter(l => l.userId === user?.uid);
+      return targetLogs
+        .filter(log => filterByPeriod(log.date, period))
+        .reduce((acc, log) => ({
+          contacts: acc.contacts + Number(log.contacts || 0),
+          evangelism: acc.evangelism + Number(log.evangelism || 0),
+          acceptances: acc.acceptances + Number(log.acceptances || 0),
+          spiritualTalks: acc.spiritualTalks + Number(log.spiritualTalks || 0),
+          invitations: acc.invitations + Number(log.invitations || 0),
+          count: acc.count + 1
+        }), { contacts: 0, evangelism: 0, acceptances: 0, spiritualTalks: 0, invitations: 0, count: 0 });
+    };
+
+    return {
+      personal: {
+        week: calculate('week', false),
+        month: calculate('month', false),
+        quarter: calculate('quarter', false),
+        year: calculate('year', false)
+      },
+      all: {
+        week: calculate('week', true),
+        month: calculate('month', true),
+        quarter: calculate('quarter', true),
+        year: calculate('year', true)
+      }
+    };
+  }, [logs, user]);
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleNumberChange = (name, value) => {
+    if (value === "") {
+      setFormData(prev => ({ ...prev, [name]: "" }));
+      return;
+    }
+    const numValue = parseInt(value, 10);
+    setFormData(prev => ({ ...prev, [name]: isNaN(numValue) ? "" : Math.max(0, numValue) }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!user) return;
+
+    const finalData = {
+      ...formData,
+      contacts: Number(formData.contacts || 0),
+      evangelism: Number(formData.evangelism || 0),
+      acceptances: Number(formData.acceptances || 0),
+      spiritualTalks: Number(formData.spiritualTalks || 0),
+      invitations: Number(formData.invitations || 0),
+      userId: user.uid,
+      userName: formData.attendees.split(',')[0] || "성도",
+      createdAt: serverTimestamp()
+    };
+
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'evangelismLogs'), finalData);
+      setFormData({
+        date: new Date().toISOString().split('T')[0],
+        attendees: '',
+        contacts: 0,
+        evangelism: 0,
+        acceptances: 0,
+        spiritualTalks: 0,
+        invitations: 0,
+        testimony: ''
+      });
+      setShowForm(false);
+      setViewType('personal'); // 작성 후 본인 기록으로 이동
+    } catch (error) { console.error(error); }
+  };
+
+  const deleteLog = async (id) => {
+    if (window.confirm("이 전도 기록을 삭제하시겠습니까?")) {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'evangelismLogs', id));
+    }
+  };
+
+  const currentStats = stats[viewType][activeTab];
+  const displayLogs = viewType === 'personal' ? logs.filter(l => l.userId === user?.uid) : logs;
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
+      {/* Community Navigation */}
+      <nav className="bg-white border-b border-slate-200 sticky top-0 z-50 px-4 py-2 flex justify-center gap-2 shadow-sm">
+        <button 
+          onClick={() => setViewType('all')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold transition-all ${
+            viewType === 'all' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'
+          }`}
+        >
+          <Globe size={14} /> 우리교회 전체현황
+        </button>
+        <button 
+          onClick={() => setViewType('personal')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold transition-all ${
+            viewType === 'personal' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'
+          }`}
+        >
+          <User size={14} /> 나의 전도일지
+        </button>
+      </nav>
+
+      {/* Hero Header */}
+      <header className={`p-8 text-white transition-all duration-700 rounded-b-[3rem] shadow-2xl mb-8 ${
+        viewType === 'all' ? 'bg-gradient-to-br from-indigo-700 via-blue-700 to-blue-900' : 'bg-gradient-to-br from-blue-600 to-indigo-700'
+      }`}>
+        <div className="max-w-4xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
+          <div className="text-center md:text-left">
+            <h1 className="text-3xl font-black tracking-tight mb-1">수원서부교회</h1>
+            <p className="text-blue-100 text-sm font-medium opacity-80 flex items-center justify-center md:justify-start gap-2">
+              {viewType === 'all' ? <Globe size={16} /> : <User size={16} />}
+              {viewType === 'all' ? '함께 일구어가는 전도의 열매' : '나의 소중한 전도 기록'}
+            </p>
+          </div>
+          <div className="bg-white/10 backdrop-blur-xl p-4 rounded-3xl border border-white/20 shadow-inner text-center">
+            <div className="text-[10px] font-bold uppercase tracking-widest mb-1 text-blue-200">Total Fruit</div>
+            <div className="text-3xl font-black">{logs.length}</div>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-4 space-y-8">
+        {/* Community Dashboard */}
+        <section className="bg-white rounded-[2.5rem] p-6 shadow-xl shadow-slate-200/50 border border-slate-100 animate-in fade-in duration-500">
+          <div className="flex flex-col gap-6">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
+                <TrendingUp className="text-blue-600" size={22} /> 
+                {viewType === 'all' ? '전 성도 합계 통계' : '나의 누적 열매'}
+              </h2>
+              
+              <div className="flex bg-slate-100 p-1.5 rounded-2xl w-full sm:w-auto overflow-x-auto no-scrollbar">
+                {[
+                  { id: 'week', label: '이번주', icon: <CalendarCheck size={14} /> },
+                  { id: 'month', label: '이번달', icon: <CalendarDays size={14} /> },
+                  { id: 'quarter', label: '분기', icon: <CalendarRange size={14} /> },
+                  { id: 'year', label: '올해', icon: <History size={14} /> }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                      activeTab === tab.id ? 'bg-white text-blue-600 shadow-md' : 'text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    {tab.icon} {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              {[
+                { label: '접촉', value: currentStats.contacts, color: 'text-blue-600', bg: 'bg-blue-50/50' },
+                { label: '전도', value: currentStats.evangelism, color: 'text-amber-600', bg: 'bg-amber-50/50' },
+                { label: '영접', value: currentStats.acceptances, color: 'text-red-600', bg: 'bg-red-50/50' },
+                { label: '대화', value: currentStats.spiritualTalks, color: 'text-emerald-600', bg: 'bg-emerald-50/50' },
+                { label: '초청', value: currentStats.invitations, color: 'text-purple-600', bg: 'bg-purple-50/50' },
+              ].map((s, i) => (
+                <div key={i} className={`${s.bg} rounded-3xl p-5 flex flex-col items-center justify-center border border-white transition-all hover:scale-105`}>
+                  <span className="text-[11px] font-bold text-slate-400 mb-1">{s.label}</span>
+                  <span className={`text-2xl font-black ${s.color}`}>{s.value}</span>
+                </div>
+              ))}
+            </div>
+            
+            <div className="flex items-center justify-center gap-2 bg-slate-50 py-3 rounded-2xl border border-dashed border-slate-200">
+              <CheckCircle2 size={16} className="text-blue-500" />
+              <p className="text-xs font-medium text-slate-500">
+                {activeTab === 'week' ? '이번 한 주간' : activeTab === 'month' ? '이번 달' : activeTab === 'quarter' ? '이번 분기' : '올 한 해'} 
+                동안 <strong>{currentStats.count}회</strong>의 전도 기록이 있습니다.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Input Trigger */}
+        {!showForm && (
+          <button 
+            onClick={() => setShowForm(true)}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-black py-6 rounded-[2.5rem] shadow-xl shadow-blue-200 flex items-center justify-center gap-3 transition-all active:scale-95 text-lg"
+          >
+            <Plus size={24} /> 오늘의 전도 은혜 기록하기
+          </button>
+        )}
+
+        {/* Form Container */}
+        {showForm && (
+          <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-slate-100 animate-in slide-in-from-bottom duration-500">
+            <div className="bg-slate-50/80 p-8 border-b border-slate-100 flex justify-between items-center">
+              <h2 className="text-xl font-black flex items-center gap-3 text-slate-800">
+                <div className="bg-blue-600 p-2 rounded-xl text-white shadow-lg"><Plus size={20} /></div>
+                새로운 전도 기록
+              </h2>
+              <button onClick={() => setShowForm(false)} className="bg-white px-4 py-2 rounded-xl text-slate-500 hover:text-slate-800 shadow-sm text-sm font-bold">닫기</button>
+            </div>
+            
+            <form onSubmit={handleSubmit} className="p-8 space-y-10">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-3">
+                  <label className="text-sm font-black text-slate-700 ml-1 flex items-center gap-2">사역 날짜</label>
+                  <input type="date" name="date" value={formData.date} onChange={handleInputChange} className="w-full p-4 bg-slate-50 rounded-2xl border-none ring-2 ring-slate-100 focus:ring-2 focus:ring-blue-500 text-lg font-medium" required />
+                </div>
+                <div className="space-y-3">
+                  <label className="text-sm font-black text-slate-700 ml-1 flex items-center gap-2">성함 (함께한 분들)</label>
+                  <input type="text" name="attendees" placeholder="기록자 성함을 적어주세요" value={formData.attendees} onChange={handleInputChange} className="w-full p-4 bg-slate-50 rounded-2xl border-none ring-2 ring-slate-100 focus:ring-2 focus:ring-blue-500 text-lg" required />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                {[
+                  { key: 'contacts', label: '접촉수', icon: <Users size={18} />, color: 'blue' },
+                  { key: 'evangelism', label: '전도수', icon: <Star size={18} />, color: 'amber' },
+                  { key: 'acceptances', label: '영접수', icon: <Heart size={18} />, color: 'red' },
+                  { key: 'spiritualTalks', label: '영적대화', icon: <MessageCircle size={18} />, color: 'emerald' },
+                  { key: 'invitations', label: '교회초청', icon: <UserPlus size={18} />, color: 'purple' },
+                ].map((item) => (
+                  <div key={item.key} className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col gap-4">
+                    <div className="flex items-center gap-2 text-slate-500">
+                      {item.icon} <span className="text-xs font-black uppercase tracking-tighter">{item.label}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <button type="button" onClick={() => handleNumberChange(item.key, (Number(formData[item.key]) || 0) - 1)} className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center hover:bg-slate-100 font-black text-xl">-</button>
+                      <input 
+                        type="number" 
+                        placeholder="0" 
+                        value={formData[item.key]} 
+                        onChange={(e) => handleNumberChange(item.key, e.target.value)} 
+                        className="w-10 text-center text-xl font-black bg-transparent border-none focus:ring-0 p-0" 
+                      />
+                      <button type="button" onClick={() => handleNumberChange(item.key, (Number(formData[item.key]) || 0) + 1)} className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center hover:bg-blue-100 font-black text-xl">+</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-3">
+                <label className="text-sm font-black text-slate-700 ml-1 flex items-center gap-2">은혜 간증</label>
+                <textarea 
+                  name="testimony" rows={5} placeholder="오늘 만난 영혼들과 나눈 은혜로운 이야기를 기록해 주세요."
+                  value={formData.testimony} onChange={handleInputChange}
+                  className="w-full p-6 bg-slate-50 rounded-[2rem] border-none ring-2 ring-slate-100 focus:ring-2 focus:ring-blue-500 transition-all text-lg shadow-inner"
+                ></textarea>
+              </div>
+
+              <button type="submit" className="w-full bg-blue-600 text-white font-black py-6 rounded-[2.5rem] shadow-2xl shadow-blue-100 flex items-center justify-center gap-3 hover:bg-blue-700 transition-all active:scale-95">
+                <Save size={24} /> 사역 기록 저장하기
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* History Stream */}
+        <div className="space-y-6">
+          <div className="flex items-center justify-between px-4">
+            <h3 className="text-xl font-black text-slate-800 flex items-center gap-3">
+              <ClipboardCheck size={24} className="text-blue-500" /> 
+              {viewType === 'all' ? '전 성도 실시간 사역 현황' : '나의 사역 히스토리'}
+            </h3>
+            <div className="px-3 py-1 bg-blue-100 text-blue-700 text-[10px] font-black rounded-full uppercase">Realtime</div>
+          </div>
+
+          {isLoading ? (
+            <div className="flex flex-col items-center py-20 gap-4">
+              <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-sm font-bold text-slate-400">기록된 열매들을 불러오는 중...</p>
+            </div>
+          ) : displayLogs.length === 0 ? (
+            <div className="bg-white rounded-[3rem] p-20 text-center border-2 border-dashed border-slate-200">
+              <p className="text-slate-400 font-black text-lg">기록이 없습니다. 첫 열매를 남겨보세요!</p>
+            </div>
+          ) : (
+            <div className="grid gap-6">
+              {displayLogs.map((log) => (
+                <div key={log.id} className="bg-white rounded-[2.5rem] p-8 shadow-xl shadow-slate-200/40 border border-slate-100 hover:shadow-2xl transition-all group overflow-hidden relative">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 relative z-10">
+                    <div className="flex items-center gap-4">
+                      <div className="bg-blue-600 text-white px-5 py-2 rounded-2xl font-black text-sm shadow-lg shadow-blue-200">
+                        {log.date}
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-lg font-black text-slate-800">{log.attendees || '익명'}</span>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1">
+                          <CheckCircle2 size={10} /> Saved to Heaven
+                        </span>
+                      </div>
+                    </div>
+                    {user?.uid === log.userId && (
+                      <button onClick={() => deleteLog(log.id)} className="absolute top-0 right-0 md:relative text-slate-300 hover:text-red-500 p-2 transition-colors">
+                        <Trash2 size={20} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2.5 mb-6 relative z-10">
+                    {[
+                      { label: '접촉', val: log.contacts, color: 'bg-blue-50 text-blue-600 border-blue-100' },
+                      { label: '전도', val: log.evangelism, color: 'bg-amber-50 text-amber-600 border-amber-100' },
+                      { label: '영접', val: log.acceptances, color: 'bg-red-50 text-red-600 border-red-100' },
+                      { label: '대화', val: log.spiritualTalks, color: 'bg-emerald-50 text-emerald-600 border-emerald-100' },
+                      { label: '초청', val: log.invitations, color: 'bg-purple-50 text-purple-600 border-purple-100' },
+                    ].filter(i => i.val > 0).map((chip, idx) => (
+                      <span key={idx} className={`${chip.color} text-[11px] font-black px-4 py-1.5 rounded-full uppercase border shadow-sm`}>
+                        {chip.label} {chip.val}
+                      </span>
+                    ))}
+                  </div>
+
+                  {log.testimony && (
+                    <div className="bg-slate-50/80 p-6 rounded-[2rem] border border-slate-100 relative group-hover:bg-blue-50/30 transition-colors duration-500">
+                      <Quote className="absolute top-4 left-4 text-blue-100" size={48} />
+                      <p className="text-slate-600 leading-relaxed relative z-10 whitespace-pre-wrap font-medium text-lg italic">
+                        "{log.testimony}"
+                      </p>
+                    </div>
+                  )}
+                  
+                  {/* Background decoration */}
+                  <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-blue-50 rounded-full blur-3xl opacity-50 group-hover:bg-blue-100 transition-colors"></div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+};
+
+export default App;
+
+```
